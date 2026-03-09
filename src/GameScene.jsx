@@ -28,6 +28,14 @@ import {
   WORLD_HEIGHT,
   WORLD_WIDTH
 } from '../shared/gameConfig.js';
+import {
+  CITY_BENCHES,
+  CITY_BUILDINGS,
+  CITY_OBSTACLES,
+  CITY_PLAZAS,
+  CITY_ROADS,
+  CITY_TREES
+} from '../shared/cityLayout.js';
 
 const CAMERA_FOV = 46;
 const CAMERA_OFFSET = new Vector3(0, 390, 250);
@@ -585,6 +593,39 @@ function ChatBubble({ message, expiresAt }) {
   );
 }
 
+function circleIntersectsRect(x, z, radius, rect) {
+  const closestX = clamp(x, rect.x - rect.width / 2, rect.x + rect.width / 2);
+  const closestZ = clamp(z, rect.z - rect.depth / 2, rect.z + rect.depth / 2);
+  const dx = x - closestX;
+  const dz = z - closestZ;
+
+  return dx * dx + dz * dz < radius * radius;
+}
+
+function collidesWithMap(x, z, radius) {
+  return CITY_OBSTACLES.some((obstacle) =>
+    circleIntersectsRect(x, z, radius, obstacle)
+  );
+}
+
+function resolveLocalMapCollision(displayState, moveX, moveZ) {
+  let nextX = clamp(displayState.x + moveX, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
+  let nextZ = displayState.z;
+
+  if (collidesWithMap(nextX, nextZ, PLAYER_RADIUS)) {
+    nextX = displayState.x;
+  }
+
+  nextZ = clamp(displayState.z + moveZ, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
+
+  if (collidesWithMap(nextX, nextZ, PLAYER_RADIUS)) {
+    nextZ = displayState.z;
+  }
+
+  displayState.x = nextX;
+  displayState.z = nextZ;
+}
+
 function InfoBubble({ name, visible }) {
   const bubble = useMemo(() => createInfoBubbleTexture(name), [name]);
 
@@ -668,6 +709,195 @@ function createCameraFootprint(aspect) {
   };
 }
 
+function RoadSegment({ x, z, width, depth, lane }) {
+  const stripeCount = Math.max(
+    3,
+    Math.floor((lane === 'horizontal' ? width : depth) / 160)
+  );
+
+  return (
+    <group>
+      <mesh position={[x, 0.65, z]} receiveShadow>
+        <boxGeometry args={[width, 1.3, depth]} />
+        <meshPhongMaterial color="#182932" shininess={10} />
+      </mesh>
+
+      {Array.from({ length: stripeCount }, (_, index) => {
+        const offset =
+          ((index / Math.max(1, stripeCount - 1)) - 0.5) *
+          ((lane === 'horizontal' ? width : depth) - 120);
+        const stripePosition =
+          lane === 'horizontal'
+            ? [x + offset, 1.15, z]
+            : [x, 1.15, z + offset];
+        const stripeSize =
+          lane === 'horizontal' ? [38, 8, 1] : [8, 38, 1];
+
+        return (
+          <mesh
+            key={`${x}-${z}-${index}`}
+            position={stripePosition}
+          >
+            <boxGeometry args={[stripeSize[0], 0.5, stripeSize[1]]} />
+            <meshBasicMaterial color="#d7eee6" opacity={0.68} transparent />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
+function BuildingLot({ x, z, width, depth, height, body, cap }) {
+  return (
+    <group position={[x, 0, z]}>
+      <mesh position={[0, height / 2, 0]} castShadow>
+        <boxGeometry args={[width, height, depth]} />
+        <meshPhongMaterial color={body} shininess={28} />
+      </mesh>
+
+      <mesh position={[0, height + 8, 0]}>
+        <boxGeometry args={[width * 0.82, 14, depth * 0.82]} />
+        <meshPhongMaterial color={cap} shininess={60} />
+      </mesh>
+
+      <mesh position={[0, 18, depth / 2 + 0.4]}>
+        <boxGeometry args={[width * 0.18, 28, 2]} />
+        <meshBasicMaterial color="#d8f8ff" opacity={0.52} transparent toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function HouseLot({ x, z, width, depth, height, body, roof }) {
+  return (
+    <group position={[x, 0, z]}>
+      <mesh position={[0, height / 2, 0]}>
+        <boxGeometry args={[width, height, depth]} />
+        <meshPhongMaterial color={body} shininess={18} />
+      </mesh>
+
+      <mesh position={[0, height + 18, 0]} rotation={[0, Math.PI / 4, 0]}>
+        <coneGeometry args={[Math.max(width, depth) * 0.72, 36, 4]} />
+        <meshPhongMaterial color={roof} shininess={10} />
+      </mesh>
+
+      <mesh position={[0, 16, depth / 2 + 0.4]}>
+        <boxGeometry args={[width * 0.22, 22, 2]} />
+        <meshPhongMaterial color="#f7f4db" />
+      </mesh>
+
+      <mesh position={[-width * 0.22, 22, depth / 2 + 0.4]}>
+        <boxGeometry args={[14, 12, 2]} />
+        <meshBasicMaterial color="#d5feff" opacity={0.55} transparent toneMapped={false} />
+      </mesh>
+      <mesh position={[width * 0.22, 22, depth / 2 + 0.4]}>
+        <boxGeometry args={[14, 12, 2]} />
+        <meshBasicMaterial color="#d5feff" opacity={0.55} transparent toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function Tree({ x, z, scale }) {
+  return (
+    <group position={[x, 0, z]} scale={scale}>
+      <mesh position={[0, 18, 0]}>
+        <cylinderGeometry args={[5, 6, 36, 8]} />
+        <meshPhongMaterial color="#4f3624" />
+      </mesh>
+      <mesh position={[0, 44, 0]}>
+        <sphereGeometry args={[20, 10, 10]} />
+        <meshPhongMaterial color="#4ac17e" shininess={20} />
+      </mesh>
+      <mesh position={[-8, 56, 6]}>
+        <sphereGeometry args={[15, 10, 10]} />
+        <meshPhongMaterial color="#71dd9b" shininess={20} />
+      </mesh>
+    </group>
+  );
+}
+
+function Bench({ x, z, rotation }) {
+  return (
+    <group position={[x, 0, z]} rotation={[0, rotation, 0]}>
+      <mesh position={[0, 10, 0]}>
+        <boxGeometry args={[34, 4, 10]} />
+        <meshPhongMaterial color="#8d694b" />
+      </mesh>
+      <mesh position={[0, 18, -4]}>
+        <boxGeometry args={[34, 4, 4]} />
+        <meshPhongMaterial color="#9a7555" />
+      </mesh>
+      <mesh position={[-12, 5, 0]}>
+        <boxGeometry args={[3, 10, 3]} />
+        <meshPhongMaterial color="#36444f" />
+      </mesh>
+      <mesh position={[12, 5, 0]}>
+        <boxGeometry args={[3, 10, 3]} />
+        <meshPhongMaterial color="#36444f" />
+      </mesh>
+    </group>
+  );
+}
+
+function CityScenery() {
+  return (
+    <>
+      {CITY_ROADS.map((road, index) => (
+        <RoadSegment key={index} {...road} />
+      ))}
+
+      {CITY_PLAZAS.map((plaza, index) => (
+        <mesh key={index} position={[plaza.x, 1, plaza.z]}>
+          <boxGeometry args={[plaza.width, 2, plaza.depth]} />
+          <meshPhongMaterial color={plaza.color} shininess={24} />
+        </mesh>
+      ))}
+
+      <mesh position={[CITY_PLAZAS[0].x, 12, CITY_PLAZAS[0].z]}>
+        <cylinderGeometry args={[54, 62, 24, 24]} />
+        <meshPhongMaterial color="#5d7682" shininess={36} />
+      </mesh>
+      <mesh position={[CITY_PLAZAS[0].x, 34, CITY_PLAZAS[0].z]}>
+        <cylinderGeometry args={[20, 28, 20, 20]} />
+        <meshPhongMaterial color="#7ee9ff" emissive="#235f69" emissiveIntensity={0.6} />
+      </mesh>
+
+      {CITY_BUILDINGS.map((building, index) =>
+        building.type === 'tower' || building.type === 'hub' ? (
+          <BuildingLot
+            key={index}
+            body={building.body}
+            cap={building.accent}
+            depth={building.depth}
+            height={building.height}
+            width={building.width}
+            x={building.x}
+            z={building.z}
+          />
+        ) : (
+          <HouseLot
+            key={index}
+            body={building.body}
+            depth={building.depth}
+            height={building.height}
+            roof={building.roof}
+            width={building.width}
+            x={building.x}
+            z={building.z}
+          />
+        )
+      )}
+      {CITY_TREES.map((tree, index) => (
+        <Tree key={index} {...tree} />
+      ))}
+      {CITY_BENCHES.map((bench, index) => (
+        <Bench key={index} {...bench} />
+      ))}
+    </>
+  );
+}
+
 function PlayerMarker({
   color,
   chatExpiresAt,
@@ -726,10 +956,12 @@ function PlayerMarker({
           ref={registerRing}
           rotation={[-Math.PI / 2, 0, 0]}
           position={[0, 0.26, 0]}
+          renderOrder={1000}
         >
           <ringGeometry args={[PLAYER_RADIUS * 1.35, PLAYER_RADIUS * 1.72, 28]} />
           <meshBasicMaterial
             color="#e8fff3"
+            depthTest={false}
             depthWrite={false}
             opacity={0.28}
             toneMapped={false}
@@ -1004,30 +1236,18 @@ function World({
 
       if (player.id === selfId) {
         if (inputX !== 0 || inputZ !== 0) {
-          displayState.x = clamp(
-            displayState.x + (inputX / inputMagnitude) * PLAYER_SPEED * delta,
-            PLAYER_RADIUS,
-            WORLD_WIDTH - PLAYER_RADIUS
-          );
-          displayState.z = clamp(
-            displayState.z + (inputZ / inputMagnitude) * PLAYER_SPEED * delta,
-            PLAYER_RADIUS,
-            WORLD_HEIGHT - PLAYER_RADIUS
+          resolveLocalMapCollision(
+            displayState,
+            (inputX / inputMagnitude) * PLAYER_SPEED * delta,
+            (inputZ / inputMagnitude) * PLAYER_SPEED * delta
           );
         }
 
         if (dashActive) {
-          displayState.x = clamp(
-            displayState.x +
-              (networkPlayer.dashDirectionX ?? 0) * PLAYER_DASH_SPEED * delta,
-            PLAYER_RADIUS,
-            WORLD_WIDTH - PLAYER_RADIUS
-          );
-          displayState.z = clamp(
-            displayState.z +
-              (networkPlayer.dashDirectionY ?? 0) * PLAYER_DASH_SPEED * delta,
-            PLAYER_RADIUS,
-            WORLD_HEIGHT - PLAYER_RADIUS
+          resolveLocalMapCollision(
+            displayState,
+            (networkPlayer.dashDirectionX ?? 0) * PLAYER_DASH_SPEED * delta,
+            (networkPlayer.dashDirectionY ?? 0) * PLAYER_DASH_SPEED * delta
           );
         }
 
@@ -1235,6 +1455,8 @@ function World({
         <planeGeometry args={[WORLD_WIDTH + 800, WORLD_HEIGHT + 800]} />
         <meshBasicMaterial color="#061015" />
       </mesh>
+
+      <CityScenery />
 
       {roster.map((player) => (
         <PlayerMarker

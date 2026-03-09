@@ -17,6 +17,7 @@ import {
   WORLD_HEIGHT,
   WORLD_WIDTH
 } from '../shared/gameConfig.js';
+import { CITY_OBSTACLES } from '../shared/cityLayout.js';
 
 const PORT = Number(process.env.PORT || 3001);
 const TICK_RATE = 1000 / 60;
@@ -127,6 +128,10 @@ function getSpawnAnchor() {
 }
 
 function isSpawnClear(x, y, ignoreId = null) {
+  if (collidesWithObstacle(x, y, PLAYER_RADIUS)) {
+    return false;
+  }
+
   for (const player of players.values()) {
     if (player.id === ignoreId) {
       continue;
@@ -240,6 +245,41 @@ function getChatDuration(message) {
     CHAT_DURATION_MIN_MS,
     CHAT_DURATION_MAX_MS
   );
+}
+
+function circleIntersectsRect(x, y, radius, rect) {
+  const closestX = clamp(x, rect.x - rect.width / 2, rect.x + rect.width / 2);
+  const closestY = clamp(y, rect.z - rect.depth / 2, rect.z + rect.depth / 2);
+  const dx = x - closestX;
+  const dy = y - closestY;
+
+  return dx * dx + dy * dy < radius * radius;
+}
+
+function collidesWithObstacle(x, y, radius) {
+  return CITY_OBSTACLES.some((obstacle) =>
+    circleIntersectsRect(x, y, radius, obstacle)
+  );
+}
+
+function resolveMapCollision(player, moveX, moveY) {
+  let nextX = clamp(player.x + moveX, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
+  let nextY = player.y;
+
+  if (collidesWithObstacle(nextX, nextY, PLAYER_RADIUS)) {
+    nextX = player.x;
+  }
+
+  nextY = clamp(player.y + moveY, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
+
+  if (collidesWithObstacle(nextX, nextY, PLAYER_RADIUS)) {
+    nextY = player.y;
+  }
+
+  return {
+    x: nextX,
+    y: nextY
+  };
 }
 
 function serializePlayers() {
@@ -418,16 +458,9 @@ function step(deltaSeconds) {
       continue;
     }
 
-    const nextX = clamp(
-      player.x + moveX,
-      PLAYER_RADIUS,
-      WORLD_WIDTH - PLAYER_RADIUS
-    );
-    const nextY = clamp(
-      player.y + moveY,
-      PLAYER_RADIUS,
-      WORLD_HEIGHT - PLAYER_RADIUS
-    );
+    const nextPosition = resolveMapCollision(player, moveX, moveY);
+    const nextX = nextPosition.x;
+    const nextY = nextPosition.y;
 
     if (nextX !== player.x || nextY !== player.y) {
       player.x = nextX;
