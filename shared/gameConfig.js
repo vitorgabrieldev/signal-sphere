@@ -12,3 +12,7 @@ export const CHAT_MESSAGE_MAX_LENGTH = 100;
 export const CHAT_DURATION_MIN_MS = 2200;
 export const CHAT_DURATION_MAX_MS = 6400;
 export const CHAT_DURATION_PER_CHAR_MS = 90;
+export const PLAYER_DASH_COOLDOWN_MS = 5000;
+export const PLAYER_DASH_DURATION_MS = 180;
+export const PLAYER_DASH_SPEED = 980;
+export const PLAYER_INSPECT_DURATION_MS = 5000;

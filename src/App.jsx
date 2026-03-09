@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import GameScene from './GameScene.jsx';
-import { CHAT_MESSAGE_MAX_LENGTH } from '../shared/gameConfig.js';
+import {
+  CHAT_MESSAGE_MAX_LENGTH,
+  PLAYER_DASH_COOLDOWN_MS
+} from '../shared/gameConfig.js';
 
 const DIRECTIONS = {
   KeyW: 'up',
@@ -114,6 +117,8 @@ export default function App() {
   const toastTimeoutsRef = useRef(new Set());
   const hasHydratedRosterRef = useRef(false);
   const [chatDraft, setChatDraft] = useState('');
+  const [dashCooldownEndsAt, setDashCooldownEndsAt] = useState(0);
+  const [dashClock, setDashClock] = useState(Date.now());
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [roster, setRoster] = useState([]);
   const [selfId, setSelfId] = useState(null);
@@ -130,6 +135,22 @@ export default function App() {
       chatInputRef.current?.focus();
     }
   }, [isChatOpen]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      const currentSelfId = selfIdRef.current;
+      const selfPlayer = currentSelfId
+        ? playersRef.current.get(currentSelfId)
+        : null;
+
+      setDashCooldownEndsAt(selfPlayer?.dashCooldownEndsAt ?? 0);
+      setDashClock(Date.now());
+    }, 80);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   useEffect(() => {
     const socket = new WebSocket(getSocketUrl());
@@ -218,6 +239,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    function sendDash() {
+      if (socketRef.current?.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      socketRef.current.send(
+        JSON.stringify({
+          type: 'dash'
+        })
+      );
+    }
+
     function sendFace(face) {
       if (socketRef.current?.readyState !== WebSocket.OPEN) {
         return;
@@ -300,6 +333,15 @@ export default function App() {
       if (event.code === 'Space') {
         event.preventDefault();
         openChatComposer();
+        return;
+      }
+
+      if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+        if (!event.repeat) {
+          event.preventDefault();
+          sendDash();
+        }
+
         return;
       }
 
@@ -388,6 +430,13 @@ export default function App() {
     }
   }
 
+  const dashRemaining = Math.max(0, dashCooldownEndsAt - dashClock);
+  const dashRatio =
+    PLAYER_DASH_COOLDOWN_MS === 0
+      ? 1
+      : 1 - dashRemaining / PLAYER_DASH_COOLDOWN_MS;
+  const dashReady = dashRemaining <= 0;
+
   return (
     <main className="app-shell">
       <GameScene
@@ -396,6 +445,22 @@ export default function App() {
         roster={roster}
         selfId={selfId}
       />
+
+      <section className="dash-meter" aria-label="Recarga do dash">
+        <div className="dash-meter-copy">
+          <strong>Dash</strong>
+          <span>{dashReady ? 'Pronto' : `${(dashRemaining / 1000).toFixed(1)}s`}</span>
+        </div>
+        <div className="dash-meter-track">
+          <div
+            className="dash-meter-fill"
+            data-ready={dashReady}
+            style={{
+              '--dash-progress': `${Math.max(0, Math.min(1, dashRatio))}`
+            }}
+          />
+        </div>
+      </section>
 
       {isChatOpen ? (
         <form className="chat-composer" onSubmit={handleChatSubmit}>

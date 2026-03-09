@@ -5,6 +5,9 @@ import {
   CHAT_DURATION_MIN_MS,
   CHAT_DURATION_PER_CHAR_MS,
   CHAT_MESSAGE_MAX_LENGTH,
+  PLAYER_DASH_COOLDOWN_MS,
+  PLAYER_DASH_DURATION_MS,
+  PLAYER_DASH_SPEED,
   PLAYER_COLLISION_DISTANCE,
   STATE_BROADCAST_HZ,
   FACE_VARIANTS,
@@ -179,6 +182,15 @@ function createPlayer(id) {
     face: Math.floor(Math.random() * FACE_VARIANTS) + 1,
     chatExpiresAt: 0,
     chatMessage: '',
+    dashAt: 0,
+    dashCooldownEndsAt: 0,
+    dashDirectionX: 0,
+    dashDirectionY: 0,
+    dashEndsAt: 0,
+    dashVelocityX: 0,
+    dashVelocityY: 0,
+    lastMoveX: 0,
+    lastMoveY: 0,
     x: spawn.x,
     y: spawn.y,
     input: {
@@ -231,7 +243,47 @@ function getChatDuration(message) {
 }
 
 function serializePlayers() {
-  return [...players.values()].map(({ input, ...player }) => player);
+  return [...players.values()].map((player) => ({
+    id: player.id,
+    name: player.name,
+    color: player.color,
+    face: player.face,
+    x: player.x,
+    y: player.y,
+    chatExpiresAt: player.chatExpiresAt,
+    chatMessage: player.chatMessage,
+    dashAt: player.dashAt,
+    dashCooldownEndsAt: player.dashCooldownEndsAt,
+    dashDirectionX: player.dashDirectionX,
+    dashDirectionY: player.dashDirectionY,
+    dashEndsAt: player.dashEndsAt
+  }));
+}
+
+function getDashDirection(player) {
+  const horizontal =
+    (player.input.right ? 1 : 0) - (player.input.left ? 1 : 0);
+  const vertical =
+    (player.input.down ? 1 : 0) - (player.input.up ? 1 : 0);
+  const magnitude = Math.hypot(horizontal, vertical);
+
+  if (magnitude > 0) {
+    return {
+      x: horizontal / magnitude,
+      y: vertical / magnitude
+    };
+  }
+
+  const lastMagnitude = Math.hypot(player.lastMoveX, player.lastMoveY);
+
+  if (lastMagnitude > 0) {
+    return {
+      x: player.lastMoveX / lastMagnitude,
+      y: player.lastMoveY / lastMagnitude
+    };
+  }
+
+  return null;
 }
 
 function resolvePlayerCollisions() {
@@ -343,19 +395,36 @@ function step(deltaSeconds) {
       (player.input.right ? 1 : 0) - (player.input.left ? 1 : 0);
     const vertical =
       (player.input.down ? 1 : 0) - (player.input.up ? 1 : 0);
+    const magnitude = Math.hypot(horizontal, vertical) || 1;
+    let moveX = 0;
+    let moveY = 0;
 
-    if (horizontal === 0 && vertical === 0) {
+    if (horizontal !== 0 || vertical !== 0) {
+      moveX += (horizontal / magnitude) * PLAYER_SPEED * deltaSeconds;
+      moveY += (vertical / magnitude) * PLAYER_SPEED * deltaSeconds;
+      player.lastMoveX = horizontal / magnitude;
+      player.lastMoveY = vertical / magnitude;
+    }
+
+    if (player.dashEndsAt > now) {
+      moveX += player.dashVelocityX * deltaSeconds;
+      moveY += player.dashVelocityY * deltaSeconds;
+    } else if (player.dashVelocityX !== 0 || player.dashVelocityY !== 0) {
+      player.dashVelocityX = 0;
+      player.dashVelocityY = 0;
+    }
+
+    if (moveX === 0 && moveY === 0) {
       continue;
     }
 
-    const magnitude = Math.hypot(horizontal, vertical) || 1;
     const nextX = clamp(
-      player.x + (horizontal / magnitude) * PLAYER_SPEED * deltaSeconds,
+      player.x + moveX,
       PLAYER_RADIUS,
       WORLD_WIDTH - PLAYER_RADIUS
     );
     const nextY = clamp(
-      player.y + (vertical / magnitude) * PLAYER_SPEED * deltaSeconds,
+      player.y + moveY,
       PLAYER_RADIUS,
       WORLD_HEIGHT - PLAYER_RADIUS
     );
@@ -432,6 +501,33 @@ wss.on('connection', (socket) => {
           broadcastState();
           stateDirty = false;
         }
+
+        return;
+      }
+
+      if (message.type === 'dash') {
+        const now = Date.now();
+
+        if (currentPlayer.dashCooldownEndsAt > now) {
+          return;
+        }
+
+        const direction = getDashDirection(currentPlayer);
+
+        if (!direction) {
+          return;
+        }
+
+        currentPlayer.dashAt = now;
+        currentPlayer.dashCooldownEndsAt = now + PLAYER_DASH_COOLDOWN_MS;
+        currentPlayer.dashDirectionX = direction.x;
+        currentPlayer.dashDirectionY = direction.y;
+        currentPlayer.dashEndsAt = now + PLAYER_DASH_DURATION_MS;
+        currentPlayer.dashVelocityX = direction.x * PLAYER_DASH_SPEED;
+        currentPlayer.dashVelocityY = direction.y * PLAYER_DASH_SPEED;
+        stateDirty = true;
+        broadcastState();
+        stateDirty = false;
 
         return;
       }
