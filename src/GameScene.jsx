@@ -17,6 +17,7 @@ import {
 } from 'three';
 import {
   CHECKER_SIZE,
+  PLAYER_COLLISION_DISTANCE,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
   PLAYER_SPEED,
@@ -45,6 +46,37 @@ function ease(current, target, delta, strength) {
 
 function lightenColor(baseColor, amount) {
   return `#${new Color(baseColor).lerp(new Color('#ffffff'), amount).getHexString()}`;
+}
+
+function resolveLocalCollision(selfState, otherState) {
+  let dx = selfState.x - otherState.x;
+  let dz = selfState.z - otherState.z;
+  let distance = Math.hypot(dx, dz);
+
+  if (distance >= PLAYER_COLLISION_DISTANCE) {
+    return;
+  }
+
+  if (distance < 0.0001) {
+    dx = 1;
+    dz = 0;
+    distance = 1;
+  }
+
+  const overlap = PLAYER_COLLISION_DISTANCE - distance;
+  const normalX = dx / distance;
+  const normalZ = dz / distance;
+
+  selfState.x = clamp(
+    selfState.x + normalX * overlap,
+    PLAYER_RADIUS,
+    WORLD_WIDTH - PLAYER_RADIUS
+  );
+  selfState.z = clamp(
+    selfState.z + normalZ * overlap,
+    PLAYER_RADIUS,
+    WORLD_HEIGHT - PLAYER_RADIUS
+  );
 }
 
 function createFloorTexture() {
@@ -331,6 +363,20 @@ function World({ inputRef, playersRef, roster, selfId }) {
             PLAYER_RADIUS,
             WORLD_HEIGHT - PLAYER_RADIUS
           );
+        }
+
+        for (const otherPlayer of roster) {
+          if (otherPlayer.id === selfId) {
+            continue;
+          }
+
+          const otherState = displayStateRef.current.get(otherPlayer.id);
+
+          if (!otherState) {
+            continue;
+          }
+
+          resolveLocalCollision(displayState, otherState);
         }
 
         displayState.x = ease(displayState.x, networkPlayer.x, delta, 18);

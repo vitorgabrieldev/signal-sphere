@@ -1,8 +1,10 @@
 import { createServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
+  PLAYER_COLLISION_DISTANCE,
   STATE_BROADCAST_HZ,
   PLAYER_RADIUS,
+  PLAYER_SPAWN_CLEARANCE,
   PLAYER_SPEED,
   WORLD_HEIGHT,
   WORLD_WIDTH
@@ -116,23 +118,49 @@ function getSpawnAnchor() {
   };
 }
 
+function isSpawnClear(x, y, ignoreId = null) {
+  for (const player of players.values()) {
+    if (player.id === ignoreId) {
+      continue;
+    }
+
+    const dx = player.x - x;
+    const dy = player.y - y;
+
+    if (dx * dx + dy * dy < PLAYER_SPAWN_CLEARANCE * PLAYER_SPAWN_CLEARANCE) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function createSpawnPoint() {
   const anchor = getSpawnAnchor();
-  const spawnIndex = players.size;
-  const angle = (spawnIndex * Math.PI * 0.72) % (Math.PI * 2);
-  const distance = 70 + (spawnIndex % 4) * 34;
 
-  return {
-    x: clamp(
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const ring = Math.floor(attempt / 6);
+    const angle = attempt * 2.399963229728653;
+    const distance = ring === 0 ? 0 : 78 + ring * 46;
+    const x = clamp(
       anchor.x + Math.cos(angle) * distance,
       PLAYER_RADIUS,
       WORLD_WIDTH - PLAYER_RADIUS
-    ),
-    y: clamp(
+    );
+    const y = clamp(
       anchor.y + Math.sin(angle) * distance,
       PLAYER_RADIUS,
       WORLD_HEIGHT - PLAYER_RADIUS
-    )
+    );
+
+    if (isSpawnClear(x, y)) {
+      return { x, y };
+    }
+  }
+
+  return {
+    x: clamp(anchor.x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS),
+    y: clamp(anchor.y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS)
   };
 }
 
@@ -171,6 +199,84 @@ function normalizeInput(input) {
 
 function serializePlayers() {
   return [...players.values()].map(({ input, ...player }) => player);
+}
+
+function resolvePlayerCollisions() {
+  const playerList = [...players.values()];
+  let moved = false;
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    let passMoved = false;
+
+    for (let index = 0; index < playerList.length; index += 1) {
+      const current = playerList[index];
+
+      for (let otherIndex = index + 1; otherIndex < playerList.length; otherIndex += 1) {
+        const other = playerList[otherIndex];
+        let dx = other.x - current.x;
+        let dy = other.y - current.y;
+        let distance = Math.hypot(dx, dy);
+
+        if (distance >= PLAYER_COLLISION_DISTANCE) {
+          continue;
+        }
+
+        if (distance < 0.0001) {
+          const angle = (index + 1) * (otherIndex + 3);
+          dx = Math.cos(angle);
+          dy = Math.sin(angle);
+          distance = 1;
+        }
+
+        const overlap = PLAYER_COLLISION_DISTANCE - distance;
+        const normalX = dx / distance;
+        const normalY = dy / distance;
+        const pushX = normalX * overlap * 0.5;
+        const pushY = normalY * overlap * 0.5;
+        const nextCurrentX = clamp(
+          current.x - pushX,
+          PLAYER_RADIUS,
+          WORLD_WIDTH - PLAYER_RADIUS
+        );
+        const nextCurrentY = clamp(
+          current.y - pushY,
+          PLAYER_RADIUS,
+          WORLD_HEIGHT - PLAYER_RADIUS
+        );
+        const nextOtherX = clamp(
+          other.x + pushX,
+          PLAYER_RADIUS,
+          WORLD_WIDTH - PLAYER_RADIUS
+        );
+        const nextOtherY = clamp(
+          other.y + pushY,
+          PLAYER_RADIUS,
+          WORLD_HEIGHT - PLAYER_RADIUS
+        );
+
+        if (
+          nextCurrentX !== current.x ||
+          nextCurrentY !== current.y ||
+          nextOtherX !== other.x ||
+          nextOtherY !== other.y
+        ) {
+          current.x = nextCurrentX;
+          current.y = nextCurrentY;
+          other.x = nextOtherX;
+          other.y = nextOtherY;
+          passMoved = true;
+        }
+      }
+    }
+
+    if (!passMoved) {
+      break;
+    }
+
+    moved = true;
+  }
+
+  return moved;
 }
 
 function broadcastState() {
@@ -218,7 +324,9 @@ function step(deltaSeconds) {
     }
   }
 
-  if (moved) {
+  const collided = resolvePlayerCollisions();
+
+  if (moved || collided) {
     stateDirty = true;
   }
 }
@@ -228,6 +336,7 @@ wss.on('connection', (socket) => {
   const player = createPlayer(playerId);
 
   players.set(playerId, player);
+  resolvePlayerCollisions();
   socket.playerId = playerId;
   stateDirty = true;
 
