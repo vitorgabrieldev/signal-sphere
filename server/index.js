@@ -1,8 +1,13 @@
 import { createServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
+  CHAT_DURATION_MAX_MS,
+  CHAT_DURATION_MIN_MS,
+  CHAT_DURATION_PER_CHAR_MS,
+  CHAT_MESSAGE_MAX_LENGTH,
   PLAYER_COLLISION_DISTANCE,
   STATE_BROADCAST_HZ,
+  FACE_VARIANTS,
   PLAYER_RADIUS,
   PLAYER_SPAWN_CLEARANCE,
   PLAYER_SPEED,
@@ -171,6 +176,9 @@ function createPlayer(id) {
     id,
     name: createPlayerName(),
     color: pickPlayerColor(),
+    face: Math.floor(Math.random() * FACE_VARIANTS) + 1,
+    chatExpiresAt: 0,
+    chatMessage: '',
     x: spawn.x,
     y: spawn.y,
     input: {
@@ -195,6 +203,31 @@ function normalizeInput(input) {
   };
 
   return next;
+}
+
+function normalizeFace(face) {
+  const parsed = Number.parseInt(face, 10);
+
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+
+  return clamp(parsed, 1, FACE_VARIANTS);
+}
+
+function normalizeChatMessage(message) {
+  return String(message ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, CHAT_MESSAGE_MAX_LENGTH);
+}
+
+function getChatDuration(message) {
+  return clamp(
+    CHAT_DURATION_MIN_MS + message.length * CHAT_DURATION_PER_CHAR_MS,
+    CHAT_DURATION_MIN_MS,
+    CHAT_DURATION_MAX_MS
+  );
 }
 
 function serializePlayers() {
@@ -294,6 +327,16 @@ function broadcastState() {
 
 function step(deltaSeconds) {
   let moved = false;
+  let expiredChat = false;
+  const now = Date.now();
+
+  for (const player of players.values()) {
+    if (player.chatMessage && player.chatExpiresAt <= now) {
+      player.chatMessage = '';
+      player.chatExpiresAt = 0;
+      expiredChat = true;
+    }
+  }
 
   for (const player of players.values()) {
     const horizontal =
@@ -326,7 +369,7 @@ function step(deltaSeconds) {
 
   const collided = resolvePlayerCollisions();
 
-  if (moved || collided) {
+  if (moved || collided || expiredChat) {
     stateDirty = true;
   }
 }
@@ -352,13 +395,48 @@ wss.on('connection', (socket) => {
   socket.on('message', (rawMessage) => {
     try {
       const message = JSON.parse(String(rawMessage));
+      const currentPlayer = players.get(playerId);
 
-      if (message.type !== 'input') {
+      if (!currentPlayer) {
         return;
       }
 
-      const currentPlayer = players.get(playerId);
-      if (!currentPlayer) {
+      if (message.type === 'face') {
+        const nextFace = normalizeFace(message.payload?.face);
+
+        if (nextFace !== currentPlayer.face) {
+          currentPlayer.face = nextFace;
+          stateDirty = true;
+          broadcastState();
+          stateDirty = false;
+        }
+
+        return;
+      }
+
+      if (message.type === 'chat') {
+        const nextMessage = normalizeChatMessage(message.payload?.message);
+        const previousMessage = currentPlayer.chatMessage;
+        const previousExpiresAt = currentPlayer.chatExpiresAt;
+
+        currentPlayer.chatMessage = nextMessage;
+        currentPlayer.chatExpiresAt = nextMessage
+          ? Date.now() + getChatDuration(nextMessage)
+          : 0;
+
+        if (
+          currentPlayer.chatMessage !== previousMessage ||
+          currentPlayer.chatExpiresAt !== previousExpiresAt
+        ) {
+          stateDirty = true;
+          broadcastState();
+          stateDirty = false;
+        }
+
+        return;
+      }
+
+      if (message.type !== 'input') {
         return;
       }
 

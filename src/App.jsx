@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import GameScene from './GameScene.jsx';
+import { CHAT_MESSAGE_MAX_LENGTH } from '../shared/gameConfig.js';
 
 const DIRECTIONS = {
   KeyW: 'up',
@@ -47,7 +48,10 @@ function createRoster(players) {
   return players.map((player) => ({
     id: player.id,
     color: player.color,
-    name: player.name
+    name: player.name,
+    face: player.face,
+    chatExpiresAt: player.chatExpiresAt ?? 0,
+    chatMessage: player.chatMessage ?? ''
   }));
 }
 
@@ -68,6 +72,24 @@ function isSameRoster(currentRoster, nextPlayers) {
     if (currentRoster[index]?.name !== nextPlayers[index].name) {
       return false;
     }
+
+    if (currentRoster[index]?.face !== nextPlayers[index].face) {
+      return false;
+    }
+
+    if (
+      currentRoster[index]?.chatExpiresAt !==
+      (nextPlayers[index].chatExpiresAt ?? 0)
+    ) {
+      return false;
+    }
+
+    if (
+      currentRoster[index]?.chatMessage !==
+      (nextPlayers[index].chatMessage ?? '')
+    ) {
+      return false;
+    }
   }
 
   return true;
@@ -85,10 +107,14 @@ export default function App() {
   const socketRef = useRef(null);
   const inputRef = useRef(createEmptyInput());
   const selfIdRef = useRef(null);
+  const chatInputRef = useRef(null);
+  const chatOpenRef = useRef(false);
   const playersRef = useRef(new Map());
   const previousRosterRef = useRef([]);
   const toastTimeoutsRef = useRef(new Set());
   const hasHydratedRosterRef = useRef(false);
+  const [chatDraft, setChatDraft] = useState('');
+  const [isChatOpen, setIsChatOpen] = useState(false);
   const [roster, setRoster] = useState([]);
   const [selfId, setSelfId] = useState(null);
   const [toasts, setToasts] = useState([]);
@@ -96,6 +122,14 @@ export default function App() {
   useEffect(() => {
     selfIdRef.current = selfId;
   }, [selfId]);
+
+  useEffect(() => {
+    chatOpenRef.current = isChatOpen;
+
+    if (isChatOpen) {
+      chatInputRef.current?.focus();
+    }
+  }, [isChatOpen]);
 
   useEffect(() => {
     const socket = new WebSocket(getSocketUrl());
@@ -184,6 +218,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    function sendFace(face) {
+      if (socketRef.current?.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      socketRef.current.send(
+        JSON.stringify({
+          type: 'face',
+          payload: { face }
+        })
+      );
+    }
+
     function sendInput(nextInput) {
       if (socketRef.current?.readyState !== WebSocket.OPEN) {
         return;
@@ -206,6 +253,19 @@ export default function App() {
       sendInput(nextInput);
     }
 
+    function closeChatComposer() {
+      chatOpenRef.current = false;
+      setIsChatOpen(false);
+      setChatDraft('');
+    }
+
+    function openChatComposer() {
+      chatOpenRef.current = true;
+      setInput(createEmptyInput());
+      setChatDraft('');
+      setIsChatOpen(true);
+    }
+
     function updateInput(event, value) {
       const direction = DIRECTIONS[event.code];
 
@@ -223,8 +283,43 @@ export default function App() {
       setInput(nextInput);
     }
 
-    const handleKeyDown = (event) => updateInput(event, true);
-    const handleKeyUp = (event) => updateInput(event, false);
+    const handleKeyDown = (event) => {
+      if (chatOpenRef.current) {
+        return;
+      }
+
+      if (
+        event.target instanceof HTMLElement &&
+        (event.target.tagName === 'INPUT' ||
+          event.target.tagName === 'TEXTAREA' ||
+          event.target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (event.code === 'Space') {
+        event.preventDefault();
+        openChatComposer();
+        return;
+      }
+
+      const faceCodeMatch = event.code.match(/^Digit([1-9])$|^Numpad([1-9])$/);
+
+      if (faceCodeMatch) {
+        event.preventDefault();
+        sendFace(Number(faceCodeMatch[1] ?? faceCodeMatch[2]));
+        return;
+      }
+
+      updateInput(event, true);
+    };
+    const handleKeyUp = (event) => {
+      if (chatOpenRef.current) {
+        return;
+      }
+
+      updateInput(event, false);
+    };
     const resetInput = () => {
       if (!hasActiveInput(inputRef.current)) {
         return;
@@ -235,23 +330,63 @@ export default function App() {
     const handleVisibilityChange = () => {
       if (document.hidden) {
         resetInput();
+        closeChatComposer();
       }
+    };
+    const handleWindowBlur = () => {
+      resetInput();
+      closeChatComposer();
+    };
+    const handlePageHide = () => {
+      resetInput();
+      closeChatComposer();
     };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
-    window.addEventListener('blur', resetInput);
-    window.addEventListener('pagehide', resetInput);
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('pagehide', handlePageHide);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
-      window.removeEventListener('blur', resetInput);
-      window.removeEventListener('pagehide', resetInput);
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('pagehide', handlePageHide);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
+
+  function closeChatComposer() {
+    chatOpenRef.current = false;
+    setIsChatOpen(false);
+    setChatDraft('');
+  }
+
+  function handleChatSubmit(event) {
+    event.preventDefault();
+
+    const message = chatDraft.trim().slice(0, CHAT_MESSAGE_MAX_LENGTH);
+    closeChatComposer();
+
+    if (!message || socketRef.current?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    socketRef.current.send(
+      JSON.stringify({
+        type: 'chat',
+        payload: { message }
+      })
+    );
+  }
+
+  function handleChatKeyDown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeChatComposer();
+    }
+  }
 
   return (
     <main className="app-shell">
@@ -261,6 +396,20 @@ export default function App() {
         roster={roster}
         selfId={selfId}
       />
+
+      {isChatOpen ? (
+        <form className="chat-composer" onSubmit={handleChatSubmit}>
+          <input
+            ref={chatInputRef}
+            className="chat-input"
+            maxLength={CHAT_MESSAGE_MAX_LENGTH}
+            onChange={(event) => setChatDraft(event.target.value)}
+            onKeyDown={handleChatKeyDown}
+            placeholder="Digite sua mensagem e pressione Enter"
+            value={chatDraft}
+          />
+        </form>
+      ) : null}
 
       <aside className="toast-stack" aria-live="polite" aria-atomic="true">
         {toasts.map((toast) => (

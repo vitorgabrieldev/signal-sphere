@@ -17,6 +17,7 @@ import {
 } from 'three';
 import {
   CHECKER_SIZE,
+  FACE_VARIANTS,
   PLAYER_COLLISION_DISTANCE,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
@@ -35,6 +36,9 @@ const CAMERA_CORNERS = [
   new Vector2(1, 1)
 ];
 const TILES_PER_TEXTURE = 4;
+const FACE_SIZE = 26;
+const CHAT_BUBBLE_MAX_WIDTH = 420;
+const CHAT_BUBBLE_SCALE = 0.15;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -164,6 +168,286 @@ function createDisplayState(player) {
   };
 }
 
+function drawFaceFeatures(context, variant) {
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.strokeStyle = '#061015';
+  context.fillStyle = '#061015';
+
+  switch (variant) {
+    case 1:
+      context.lineWidth = 10;
+      context.beginPath();
+      context.arc(128, 146, 44, 0.2, Math.PI - 0.2);
+      context.stroke();
+      break;
+    case 2:
+      context.lineWidth = 8;
+      context.beginPath();
+      context.arc(128, 152, 36, Math.PI + 0.2, Math.PI * 2 - 0.2);
+      context.stroke();
+      break;
+    case 3:
+      context.lineWidth = 8;
+      context.beginPath();
+      context.moveTo(84, 146);
+      context.quadraticCurveTo(128, 118, 172, 146);
+      context.stroke();
+      break;
+    case 4:
+      context.lineWidth = 8;
+      context.beginPath();
+      context.moveTo(88, 154);
+      context.lineTo(168, 154);
+      context.stroke();
+      break;
+    case 5:
+      context.lineWidth = 8;
+      context.beginPath();
+      context.arc(128, 150, 34, 0.15, Math.PI - 0.15);
+      context.stroke();
+      context.beginPath();
+      context.moveTo(108, 150);
+      context.lineTo(108, 168);
+      context.moveTo(148, 150);
+      context.lineTo(148, 168);
+      context.stroke();
+      break;
+    case 6:
+      context.lineWidth = 7;
+      context.beginPath();
+      context.moveTo(86, 154);
+      context.quadraticCurveTo(106, 132, 126, 154);
+      context.quadraticCurveTo(148, 132, 170, 154);
+      context.stroke();
+      break;
+    case 7:
+      context.lineWidth = 8;
+      context.beginPath();
+      context.arc(128, 146, 42, 0.12, Math.PI - 0.12);
+      context.stroke();
+      context.fillStyle = '#ffeef4';
+      context.fillRect(104, 148, 48, 16);
+      break;
+    case 8:
+      context.lineWidth = 8;
+      context.beginPath();
+      context.moveTo(88, 152);
+      context.quadraticCurveTo(128, 170, 168, 152);
+      context.stroke();
+      context.beginPath();
+      context.moveTo(98, 106);
+      context.lineTo(114, 116);
+      context.moveTo(142, 116);
+      context.lineTo(158, 106);
+      context.stroke();
+      break;
+    case 9:
+      context.lineWidth = 7;
+      context.beginPath();
+      context.moveTo(90, 152);
+      context.bezierCurveTo(110, 132, 146, 172, 166, 152);
+      context.stroke();
+      context.beginPath();
+      context.moveTo(92, 110);
+      context.quadraticCurveTo(108, 98, 120, 110);
+      context.moveTo(136, 110);
+      context.quadraticCurveTo(148, 98, 164, 110);
+      context.stroke();
+      break;
+    default:
+      context.lineWidth = 8;
+      context.beginPath();
+      context.arc(128, 146, 40, 0.15, Math.PI - 0.15);
+      context.stroke();
+  }
+}
+
+function createFaceTextures() {
+  return Array.from({ length: FACE_VARIANTS }, (_, index) => {
+    const variant = index + 1;
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+
+    canvas.width = 256;
+    canvas.height = 256;
+
+    if (!context) {
+      return new Texture();
+    }
+
+    const gradient = context.createRadialGradient(110, 86, 24, 128, 128, 128);
+    gradient.addColorStop(0, '#ffffff');
+    gradient.addColorStop(1, '#d9f7ff');
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = 'rgba(0, 0, 0, 0.22)';
+    context.beginPath();
+    context.ellipse(128, 216, 64, 20, 0, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = gradient;
+    context.beginPath();
+    context.arc(128, 118, 84, 0, Math.PI * 2);
+    context.fill();
+
+    context.strokeStyle = 'rgba(0, 18, 28, 0.35)';
+    context.lineWidth = 8;
+    context.stroke();
+
+    context.fillStyle = '#061015';
+    context.beginPath();
+    context.arc(94, 102, 11, 0, Math.PI * 2);
+    context.arc(162, 102, 11, 0, Math.PI * 2);
+    context.fill();
+
+    drawFaceFeatures(context, variant);
+
+    const texture = new CanvasTexture(canvas);
+    texture.colorSpace = SRGBColorSpace;
+    texture.magFilter = LinearFilter;
+    texture.minFilter = LinearMipmapLinearFilter;
+    texture.needsUpdate = true;
+
+    return texture;
+  });
+}
+
+function wrapText(context, text, maxWidth) {
+  const words = text.split(' ');
+  const lines = [];
+  let currentLine = '';
+
+  for (const word of words) {
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
+
+    if (context.measureText(candidate).width <= maxWidth || !currentLine) {
+      currentLine = candidate;
+      continue;
+    }
+
+    lines.push(currentLine);
+    currentLine = word;
+  }
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  return lines;
+}
+
+function createChatBubbleTexture(message) {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+
+  canvas.width = 640;
+  canvas.height = 320;
+
+  if (!context) {
+    return {
+      texture: new Texture(),
+      width: 36,
+      height: 18
+    };
+  }
+
+  context.font = '700 62px "Segoe UI", sans-serif';
+  const lines = wrapText(context, message, CHAT_BUBBLE_MAX_WIDTH);
+  const contentWidth = Math.max(
+    ...lines.map((line) => context.measureText(line).width),
+    140
+  );
+  const bubbleWidth = Math.min(580, contentWidth + 88);
+  const bubbleHeight = Math.min(262, lines.length * 72 + 70);
+  const bubbleX = (canvas.width - bubbleWidth) / 2;
+  const bubbleY = 20;
+  const radius = 26;
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+
+  context.fillStyle = 'rgba(0, 0, 0, 0.2)';
+  context.beginPath();
+  context.ellipse(canvas.width / 2, bubbleHeight + 64, bubbleWidth * 0.3, 20, 0, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = 'rgba(8, 17, 22, 0.92)';
+  context.strokeStyle = 'rgba(214, 255, 244, 0.18)';
+  context.lineWidth = 5;
+  context.beginPath();
+  context.moveTo(bubbleX + radius, bubbleY);
+  context.lineTo(bubbleX + bubbleWidth - radius, bubbleY);
+  context.quadraticCurveTo(bubbleX + bubbleWidth, bubbleY, bubbleX + bubbleWidth, bubbleY + radius);
+  context.lineTo(bubbleX + bubbleWidth, bubbleY + bubbleHeight - radius);
+  context.quadraticCurveTo(
+    bubbleX + bubbleWidth,
+    bubbleY + bubbleHeight,
+    bubbleX + bubbleWidth - radius,
+    bubbleY + bubbleHeight
+  );
+  context.lineTo(canvas.width / 2 + 24, bubbleY + bubbleHeight);
+  context.lineTo(canvas.width / 2, bubbleY + bubbleHeight + 28);
+  context.lineTo(canvas.width / 2 - 24, bubbleY + bubbleHeight);
+  context.lineTo(bubbleX + radius, bubbleY + bubbleHeight);
+  context.quadraticCurveTo(bubbleX, bubbleY + bubbleHeight, bubbleX, bubbleY + bubbleHeight - radius);
+  context.lineTo(bubbleX, bubbleY + radius);
+  context.quadraticCurveTo(bubbleX, bubbleY, bubbleX + radius, bubbleY);
+  context.closePath();
+  context.fill();
+  context.stroke();
+
+  context.fillStyle = '#f1fff8';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+
+  lines.forEach((line, index) => {
+    context.fillText(
+      line,
+      canvas.width / 2,
+      bubbleY + bubbleHeight / 2 - (lines.length - 1) * 34 + index * 68
+    );
+  });
+
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  texture.magFilter = LinearFilter;
+  texture.minFilter = LinearMipmapLinearFilter;
+  texture.needsUpdate = true;
+
+  return {
+    texture,
+    width: bubbleWidth * CHAT_BUBBLE_SCALE,
+    height: (bubbleHeight + 30) * CHAT_BUBBLE_SCALE
+  };
+}
+
+function ChatBubble({ message, expiresAt }) {
+  const bubble = useMemo(() => createChatBubbleTexture(message), [message]);
+
+  useEffect(() => () => {
+    bubble.texture.dispose();
+  }, [bubble]);
+
+  if (!message || expiresAt <= Date.now()) {
+    return null;
+  }
+
+  return (
+    <sprite
+      position={[0, PLAYER_HEIGHT + 58, 0]}
+      scale={[bubble.width, bubble.height, 1]}
+    >
+      <spriteMaterial
+        alphaTest={0.06}
+        depthWrite={false}
+        map={bubble.texture}
+        toneMapped={false}
+        transparent
+      />
+    </sprite>
+  );
+}
+
 function createCameraFootprint(aspect) {
   const probeCamera = new PerspectiveCamera(CAMERA_FOV, aspect, 0.1, 5000);
   const raycaster = new Raycaster();
@@ -193,15 +477,22 @@ function createCameraFootprint(aspect) {
 
 function PlayerMarker({
   color,
+  chatExpiresAt,
+  chatMessage,
+  face,
+  faceTextures,
   isSelf,
   registerBody,
   registerRing,
   registerRoot
 }) {
   const topColor = useMemo(() => lightenColor(color, 0.62), [color]);
+  const faceTexture = faceTextures[Math.max(0, (face ?? 1) - 1)] ?? faceTextures[0];
 
   return (
     <group ref={registerRoot}>
+      <ChatBubble expiresAt={chatExpiresAt} message={chatMessage} />
+
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.18, 0]}>
         <circleGeometry args={[PLAYER_RADIUS * 1.08, 18]} />
         <meshBasicMaterial
@@ -252,6 +543,16 @@ function PlayerMarker({
           />
           <meshBasicMaterial color={topColor} toneMapped={false} />
         </mesh>
+
+        <sprite position={[0, PLAYER_HEIGHT + 23, 0]} scale={[FACE_SIZE, FACE_SIZE, 1]}>
+          <spriteMaterial
+            alphaTest={0.08}
+            depthWrite={false}
+            map={faceTexture}
+            toneMapped={false}
+            transparent
+          />
+        </sprite>
       </group>
     </group>
   );
@@ -260,6 +561,7 @@ function PlayerMarker({
 function World({ inputRef, playersRef, roster, selfId }) {
   const { camera, gl, size } = useThree();
   const floorTexture = useMemo(() => createFloorTexture(), []);
+  const faceTextures = useMemo(() => createFaceTextures(), []);
   const playerRefs = useRef(new Map());
   const displayStateRef = useRef(new Map());
   const cameraTargetRef = useRef(new Vector3(WORLD_WIDTH / 2, 0, WORLD_HEIGHT / 2));
@@ -291,8 +593,11 @@ function World({ inputRef, playersRef, roster, selfId }) {
 
     return () => {
       floorTexture.dispose();
+      for (const texture of faceTextures) {
+        texture.dispose();
+      }
     };
-  }, [camera, floorTexture, gl]);
+  }, [camera, faceTextures, floorTexture, gl]);
 
   useEffect(() => {
     const activeIds = new Set(roster.map((player) => player.id));
@@ -487,7 +792,11 @@ function World({ inputRef, playersRef, roster, selfId }) {
       {roster.map((player) => (
         <PlayerMarker
           key={player.id}
+          chatExpiresAt={player.chatExpiresAt}
+          chatMessage={player.chatMessage}
           color={player.color}
+          face={player.face}
+          faceTextures={faceTextures}
           isSelf={player.id === selfId}
           registerBody={(node) => setPlayerRef(player.id, 'body', node)}
           registerRing={(node) => setPlayerRef(player.id, 'ring', node)}
