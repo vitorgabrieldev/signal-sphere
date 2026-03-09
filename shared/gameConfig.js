@@ -1,7 +1,14 @@
 export const WORLD_WIDTH = 3600;
 export const WORLD_HEIGHT = 2400;
 export const PLAYER_RADIUS = 14;
+export const PLAYER_COLLISION_DISTANCE = PLAYER_RADIUS * 2;
+export const PLAYER_SPAWN_CLEARANCE = PLAYER_RADIUS * 3;
 export const PLAYER_HEIGHT = 20;
 export const PLAYER_SPEED = 240;
 export const STATE_BROADCAST_HZ = 60;
 export const CHECKER_SIZE = 120;
+export const FACE_VARIANTS = 9;
+export const CHAT_MESSAGE_MAX_LENGTH = 100;
+export const CHAT_DURATION_MIN_MS = 2200;
+export const CHAT_DURATION_MAX_MS = 6400;
+export const CHAT_DURATION_PER_CHAR_MS = 90;

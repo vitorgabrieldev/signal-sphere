@@ -1,8 +1,15 @@
 import { createServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
+  CHAT_DURATION_MAX_MS,
+  CHAT_DURATION_MIN_MS,
+  CHAT_DURATION_PER_CHAR_MS,
+  CHAT_MESSAGE_MAX_LENGTH,
+  PLAYER_COLLISION_DISTANCE,
   STATE_BROADCAST_HZ,
+  FACE_VARIANTS,
   PLAYER_RADIUS,
+  PLAYER_SPAWN_CLEARANCE,
   PLAYER_SPEED,
   WORLD_HEIGHT,
   WORLD_WIDTH
@@ -116,23 +123,49 @@ function getSpawnAnchor() {
   };
 }
 
+function isSpawnClear(x, y, ignoreId = null) {
+  for (const player of players.values()) {
+    if (player.id === ignoreId) {
+      continue;
+    }
+
+    const dx = player.x - x;
+    const dy = player.y - y;
+
+    if (dx * dx + dy * dy < PLAYER_SPAWN_CLEARANCE * PLAYER_SPAWN_CLEARANCE) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function createSpawnPoint() {
   const anchor = getSpawnAnchor();
-  const spawnIndex = players.size;
-  const angle = (spawnIndex * Math.PI * 0.72) % (Math.PI * 2);
-  const distance = 70 + (spawnIndex % 4) * 34;
 
-  return {
-    x: clamp(
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const ring = Math.floor(attempt / 6);
+    const angle = attempt * 2.399963229728653;
+    const distance = ring === 0 ? 0 : 78 + ring * 46;
+    const x = clamp(
       anchor.x + Math.cos(angle) * distance,
       PLAYER_RADIUS,
       WORLD_WIDTH - PLAYER_RADIUS
-    ),
-    y: clamp(
+    );
+    const y = clamp(
       anchor.y + Math.sin(angle) * distance,
       PLAYER_RADIUS,
       WORLD_HEIGHT - PLAYER_RADIUS
-    )
+    );
+
+    if (isSpawnClear(x, y)) {
+      return { x, y };
+    }
+  }
+
+  return {
+    x: clamp(anchor.x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS),
+    y: clamp(anchor.y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS)
   };
 }
 
@@ -143,6 +176,9 @@ function createPlayer(id) {
     id,
     name: createPlayerName(),
     color: pickPlayerColor(),
+    face: Math.floor(Math.random() * FACE_VARIANTS) + 1,
+    chatExpiresAt: 0,
+    chatMessage: '',
     x: spawn.x,
     y: spawn.y,
     input: {
@@ -169,8 +205,111 @@ function normalizeInput(input) {
   return next;
 }
 
+function normalizeFace(face) {
+  const parsed = Number.parseInt(face, 10);
+
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+
+  return clamp(parsed, 1, FACE_VARIANTS);
+}
+
+function normalizeChatMessage(message) {
+  return String(message ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, CHAT_MESSAGE_MAX_LENGTH);
+}
+
+function getChatDuration(message) {
+  return clamp(
+    CHAT_DURATION_MIN_MS + message.length * CHAT_DURATION_PER_CHAR_MS,
+    CHAT_DURATION_MIN_MS,
+    CHAT_DURATION_MAX_MS
+  );
+}
+
 function serializePlayers() {
   return [...players.values()].map(({ input, ...player }) => player);
+}
+
+function resolvePlayerCollisions() {
+  const playerList = [...players.values()];
+  let moved = false;
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    let passMoved = false;
+
+    for (let index = 0; index < playerList.length; index += 1) {
+      const current = playerList[index];
+
+      for (let otherIndex = index + 1; otherIndex < playerList.length; otherIndex += 1) {
+        const other = playerList[otherIndex];
+        let dx = other.x - current.x;
+        let dy = other.y - current.y;
+        let distance = Math.hypot(dx, dy);
+
+        if (distance >= PLAYER_COLLISION_DISTANCE) {
+          continue;
+        }
+
+        if (distance < 0.0001) {
+          const angle = (index + 1) * (otherIndex + 3);
+          dx = Math.cos(angle);
+          dy = Math.sin(angle);
+          distance = 1;
+        }
+
+        const overlap = PLAYER_COLLISION_DISTANCE - distance;
+        const normalX = dx / distance;
+        const normalY = dy / distance;
+        const pushX = normalX * overlap * 0.5;
+        const pushY = normalY * overlap * 0.5;
+        const nextCurrentX = clamp(
+          current.x - pushX,
+          PLAYER_RADIUS,
+          WORLD_WIDTH - PLAYER_RADIUS
+        );
+        const nextCurrentY = clamp(
+          current.y - pushY,
+          PLAYER_RADIUS,
+          WORLD_HEIGHT - PLAYER_RADIUS
+        );
+        const nextOtherX = clamp(
+          other.x + pushX,
+          PLAYER_RADIUS,
+          WORLD_WIDTH - PLAYER_RADIUS
+        );
+        const nextOtherY = clamp(
+          other.y + pushY,
+          PLAYER_RADIUS,
+          WORLD_HEIGHT - PLAYER_RADIUS
+        );
+
+        if (
+          nextCurrentX !== current.x ||
+          nextCurrentY !== current.y ||
+          nextOtherX !== other.x ||
+          nextOtherY !== other.y
+        ) {
+          current.x = nextCurrentX;
+          current.y = nextCurrentY;
+          other.x = nextOtherX;
+          other.y = nextOtherY;
+          passMoved = true;
+        }
+      }
+    }
+
+    if (!passMoved) {
+      break;
+    }
+
+    moved = true;
+  }
+
+  return moved;
 }
 
 function broadcastState() {
@@ -188,6 +327,16 @@ function broadcastState() {
 
 function step(deltaSeconds) {
   let moved = false;
+  let expiredChat = false;
+  const now = Date.now();
+
+  for (const player of players.values()) {
+    if (player.chatMessage && player.chatExpiresAt <= now) {
+      player.chatMessage = '';
+      player.chatExpiresAt = 0;
+      expiredChat = true;
+    }
+  }
 
   for (const player of players.values()) {
     const horizontal =
@@ -218,7 +367,9 @@ function step(deltaSeconds) {
     }
   }
 
-  if (moved) {
+  const collided = resolvePlayerCollisions();
+
+  if (moved || collided || expiredChat) {
     stateDirty = true;
   }
 }
@@ -228,6 +379,7 @@ wss.on('connection', (socket) => {
   const player = createPlayer(playerId);
 
   players.set(playerId, player);
+  resolvePlayerCollisions();
   socket.playerId = playerId;
   stateDirty = true;
 
@@ -243,13 +395,48 @@ wss.on('connection', (socket) => {
   socket.on('message', (rawMessage) => {
     try {
       const message = JSON.parse(String(rawMessage));
+      const currentPlayer = players.get(playerId);
 
-      if (message.type !== 'input') {
+      if (!currentPlayer) {
         return;
       }
 
-      const currentPlayer = players.get(playerId);
-      if (!currentPlayer) {
+      if (message.type === 'face') {
+        const nextFace = normalizeFace(message.payload?.face);
+
+        if (nextFace !== currentPlayer.face) {
+          currentPlayer.face = nextFace;
+          stateDirty = true;
+          broadcastState();
+          stateDirty = false;
+        }
+
+        return;
+      }
+
+      if (message.type === 'chat') {
+        const nextMessage = normalizeChatMessage(message.payload?.message);
+        const previousMessage = currentPlayer.chatMessage;
+        const previousExpiresAt = currentPlayer.chatExpiresAt;
+
+        currentPlayer.chatMessage = nextMessage;
+        currentPlayer.chatExpiresAt = nextMessage
+          ? Date.now() + getChatDuration(nextMessage)
+          : 0;
+
+        if (
+          currentPlayer.chatMessage !== previousMessage ||
+          currentPlayer.chatExpiresAt !== previousExpiresAt
+        ) {
+          stateDirty = true;
+          broadcastState();
+          stateDirty = false;
+        }
+
+        return;
+      }
+
+      if (message.type !== 'input') {
         return;
       }
 

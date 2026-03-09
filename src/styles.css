@@ -32,6 +32,40 @@ body {
   display: block;
 }
 
+.chat-composer {
+  position: fixed;
+  left: 50%;
+  bottom: 76px;
+  z-index: 25;
+  width: min(560px, calc(100vw - 32px));
+  transform: translateX(-50%);
+}
+
+.chat-input {
+  width: 100%;
+  min-height: 54px;
+  padding: 14px 18px;
+  border: 1px solid rgba(214, 255, 244, 0.16);
+  border-radius: 10px;
+  outline: none;
+  background: rgba(8, 17, 22, 0.92);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.35);
+  color: #f1fff8;
+  font: 600 1rem/1.35 "Segoe UI", sans-serif;
+  backdrop-filter: blur(10px);
+}
+
+.chat-input::placeholder {
+  color: rgba(227, 255, 245, 0.48);
+}
+
+.chat-input:focus {
+  border-color: rgba(91, 255, 215, 0.52);
+  box-shadow:
+    0 20px 48px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(91, 255, 215, 0.3);
+}
+
 .toast-stack {
   position: fixed;
   top: 20px;
