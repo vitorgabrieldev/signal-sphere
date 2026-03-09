@@ -1,0 +1,7 @@
+export const WORLD_WIDTH = 3600;
+export const WORLD_HEIGHT = 2400;
+export const PLAYER_RADIUS = 14;
+export const PLAYER_HEIGHT = 20;
+export const PLAYER_SPEED = 240;
+export const STATE_BROADCAST_HZ = 60;
+export const CHECKER_SIZE = 120;
